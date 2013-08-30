@@ -17,65 +17,9 @@ track_name = ""
 laps = []
 trackpoints = []
 
+# FIT lat/lon units
 def degree_to_semicircle(degree):
     return int(degree * (2**31 / 180))
-
-def extract_child(node, name):
-    return node.find(name).text
-
-def step_tcx(data):
-    partial_laps = []
-    # Lap start _time_ needs to be logged... same as the timestamp?
-    def track_point(node):
-        time_raw = extract_child(node, "Time")
-        # Garmin Connect  includes .%f, RideWithGPS doesn't.
-        if '.' in time_raw:
-            format = "%Y-%m-%dT%H:%M:%S.%fZ"
-        else:
-            format = "%Y-%m-%dT%H:%M:%S"
-        time = datetime.datetime.strptime(time_raw, format)
-        etime = time - epoch
-        distance = int(float(extract_child(node, "DistanceMeters"))*100)
-        # Should probably XPath this
-        points = node.find('Position')
-        lat = float(extract_child(points, "LatitudeDegrees"))
-        lon = float(extract_child(points, "LongitudeDegrees"))
-        return (int(etime.total_seconds()), degree_to_semicircle(lat),
-                degree_to_semicircle(lon), distance)
-
-    for element in data.findall('Courses'):
-        # Going to assume there can only be one course in a file...
-        course = element.find('Course')
-        for part in course:
-            if part.tag == "Name":
-                global track_name
-                track_name = part.text + "\0"
-            elif part.tag == "Lap":
-                time = 0.0
-                distance = 0
-                start = (0.0, 0.0)
-                for attr in part:
-                    if attr.tag == "TotalTimeSeconds":
-                        time = float(attr.text)
-                    elif attr.tag == "DistanceMeters":
-                        distance = int(float(attr.text)*100)
-                    elif attr.tag == "BeginPosition":
-                        lat = float(extract_child(attr, 'LatitudeDegrees'))
-                        lon = float(extract_child(attr, 'LongitudeDegrees'))
-                        start = (degree_to_semicircle(lat), degree_to_semicircle(lon))
-                partial_laps.append((time, distance, start))
-                # Find the first location that matches?
-            elif part.tag == "Track":
-                points = part.findall("Trackpoint")
-                for tp in points:
-                    trackpoints.append(track_point(tp))
-
-    # Crunch the lap data - map each point to the first track point that matches in order to steal the timestamp
-    for lap in partial_laps:
-        for point in trackpoints:
-            if lap[2][0] == point[1] and lap[2][1] == point[2]:
-                laps.append((0, point[0]))
-                break
 
 # GPX samples don't have distance, but FIT requires it. Simple estimation of distance
 # Could be replaced with Haversine, but probably won't make much difference.
@@ -88,33 +32,71 @@ def distance_ll(p1, p2):
     y = (p2[0] - p1[0]);
     return int(math.hypot(x, y) * 6.3675e8); # Radius of the earth in km
 
+
+def step_tcx(data):
+    partial_laps = []
+    # Lap start _time_ needs to be logged... same as the timestamp?
+    def track_point(node):
+        time_raw = node.find("Time").text
+        # Garmin Connect  includes .%f, RideWithGPS doesn't.
+        if '.' in time_raw:
+            format = "%Y-%m-%dT%H:%M:%S.%fZ"
+        else:
+            format = "%Y-%m-%dT%H:%M:%S"
+        time = datetime.datetime.strptime(time_raw, format)
+        etime = time - epoch
+        distance = int(float(node.find("DistanceMeters").text)*100)
+        # Should probably XPath this
+        lat = float(node.find("./Position/LatitudeDegrees").text)
+        lon = float(node.find("./Position/LongitudeDegrees").text)
+        return (int(etime.total_seconds()), degree_to_semicircle(lat),
+                degree_to_semicircle(lon), distance)
+
+    for element in data.findall('Courses'):
+        course = element.find('Course')
+        global track_name
+        track_name = course.find("Name").text
+        for lap in course.findall("Lap"):
+            time = 0.0
+            distance = 0
+            start = (0.0, 0.0)
+            time = float(lap.find("TotalTimeSeconds").text)
+            distance = int(float(lap.find("DistanceMeters").text)*100) # in cm
+
+            lat = float(lap.find("BeginPosition/LatitudeDegrees").text)
+            lon = float(lap.find("BeginPosition/LongitudeDegrees").text)
+            start = (degree_to_semicircle(lat), degree_to_semicircle(lon))
+
+            partial_laps.append((time, distance, start))
+
+        for tp in course.findall("Track/Trackpoint"):
+            trackpoints.append(track_point(tp))
+
+    # Crunch the lap data - map each point to the first track point that matches in order to steal the timestamp
+    for lap in partial_laps:
+        for point in trackpoints:
+            if lap[2][0] == point[1] and lap[2][1] == point[2]:
+                laps.append((0, point[0]))
+                break
+
 def step_gpx(data):
-# Hrmmmm, GPX data doesn't have distances included...
+    global track_name
+    track_name = data.find("trk/name").text + "\0"
 
-    for element in data:
-        if element.tag != "trk":
-            continue
-        last_point = None
-        time = 0 # Arbitrary... just fill it in randomly
-        for node in element:
-            if node.tag == "name":
-                global track_name
-                track_name = node.text + "\0"
-            elif node.tag == "trkseg":
-                for point in node:
-                    if point.tag != "trkpt":
-                        continue
-                    lat = float(point.get('lat'))
-                    lon = float(point.get('lon'))
-                    if last_point:
-                        distance = distance_ll((lat, lon), last_point)
-                    else:
-                        distance = 0
+    last_point = None
+    time = 0 # Arbitrary... just fill it in randomly
+    for node in data.findall("trk/trkseg/trkpt"):
 
-                    # Write out point
-                    trackpoints.append((time, degree_to_semicircle(lat), degree_to_semicircle(lon), distance))
-                    time += 100
-                    last_point = (lat, lon)
+        lat = float(node.get('lat'))
+        lon = float(node.get('lon'))
+        if last_point:
+            distance = distance_ll((lat, lon), last_point)
+        else:
+            distance = 0
+        # Write out point
+        trackpoints.append((time, degree_to_semicircle(lat), degree_to_semicircle(lon), distance))
+        time += 100
+        last_point = (lat, lon)
 
 dom = ET.parse(sys.argv[1])
 
@@ -138,9 +120,6 @@ else:
     print("Not TCX or GPX.")
     print(course.tag)
     sys.exit(0)
-
-# print(laps)
-# print(trackpoints)
 
 # id is the Global Message Number
 # Spec is an array of (type, field definition number, value)
@@ -193,7 +172,7 @@ out.write(write_field(0, [
     (1, "uint16", 1), # manufacturer
     (2, "uint16", 1), # product
     (3, "uint32z", 1), # serial
-    (4, "uint32", int(time.time())) # time_created
+    (4, "uint32", int((datetime.datetime.utcnow() - epoch).total_seconds())) # time_created
         ]))
 
 # 31, course
@@ -223,8 +202,7 @@ out.write(write_field(21, [
     (1, "enum", 0)]))
 
 
-# Record (i.e. track point)
-# Define message 0, _, little endian, file_id = 20, 4 fields
+# Record (i.e. track point) = 20
 # Define timestamp, distance, lat, long
 out.write(write_field(20, [
     (253, "uint32", 0), # timestamp
