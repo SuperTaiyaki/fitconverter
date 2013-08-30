@@ -6,6 +6,7 @@ import struct
 import datetime
 import time
 import binascii
+import math
 from xml.dom.minidom import parse
 
 epoch = datetime.datetime(1989, 12, 31, 0, 0, 0)
@@ -29,8 +30,13 @@ def step_tcx(data):
     partial_laps = []
     # Lap start _time_ needs to be logged... same as the timestamp?
     def track_point(node):
-        time = datetime.datetime.strptime(extract_child(node, "Time"), 
-                "%Y-%m-%dT%H:%M:%S.%fZ") # Timezone crap?
+        time_raw = extract_child(node, "Time")
+        # Garmin Connect  includes .%f, RideWithGPS doesn't.
+        if '.' in time_raw:
+            format = "%Y-%m-%dT%H:%M:%S.%fZ"
+        else:
+            format = "%Y-%m-%dT%H:%M:%S"
+        time = datetime.datetime.strptime(time_raw, format)
         etime = time - epoch
         distance = int(float(extract_child(node, "DistanceMeters"))*100)
         points = node.getElementsByTagName("Position")[0]
@@ -74,27 +80,49 @@ def step_tcx(data):
             if lap[2][0] == point[1] and lap[2][1] == point[2]:
                 laps.append((0, point[0]))
                 break
+
+# GPX samples don't have distance, but FIT requires it. Simple estimation of distance
+# Could be replaced with Haversine, but probably won't make much difference.
+# p1, p2 are (lat, lon) in degrees
+# Result is in cm
+def distance_ll(p1, p2):
+    p1 = [x*math.pi/180.0 for x in p1]
+    p2 = [x*math.pi/180.0 for x in p2]
+    x = (p2[1]-p1[1]) * math.cos((p1[0]+p1[1])/2);
+    y = (p2[0] - p1[0]);
+    return int(math.hypot(x, y) * 6.3675e8); # Radius of the earth in km
+
 def step_gpx(data):
 # Hrmmmm, GPX data doesn't have distances included...
-    def track_point(node):
-        lat = float(node.attributes['lat'].value)
-        lon = float(node.attributes['lon'].value)
-        # Elevation? Time?
-        return (lat, lon)
 
     for element in data.childNodes:
         if element.nodeName != "trk":
             continue
+        last_point = None
+        time = 0 # Arbitrary... just fill it in randomly
         for node in element.childNodes:
             if node.nodeName == "name":
-                yield node.firstChild.data
+                global track_name
+                track_name = node.firstChild.data + "\0"
             elif node.nodeName == "trkseg":
                 for point in node.childNodes:
-                    pass
+                    if point.nodeName != "trkpt":
+                        continue
+                    lat = float(point.attributes['lat'].value)
+                    lon = float(point.attributes['lon'].value)
+                    if last_point:
+                        distance = distance_ll((lat, lon), last_point)
+                    else:
+                        distance = 0
+
+                    # Write out point
+                    trackpoints.append((time, degree_to_semicircle(lat), degree_to_semicircle(lon), distance))
+                    time += 100
+                    last_point = (lat, lon)
 
 if course.nodeName == "gpx":
-    print("NYI")
-    sys.exit(0)
+    step_gpx(course)
+    print(track_name)
 elif course.nodeName == "TrainingCenterDatabase": # == "tcx"
     step_tcx(course)
 
