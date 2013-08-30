@@ -8,13 +8,10 @@ import time
 import binascii
 import math
 from xml.dom.minidom import parse
+import xml.etree.ElementTree as ET
 
+# Garmin-defined
 epoch = datetime.datetime(1989, 12, 31, 0, 0, 0)
-
-fin = open(sys.argv[1])
-dom = parse(fin)
-
-course = dom.firstChild
 
 track_name = ""
 laps = []
@@ -24,7 +21,7 @@ def degree_to_semicircle(degree):
     return int(degree * (2**31 / 180))
 
 def extract_child(node, name):
-    return node.getElementsByTagName(name)[0].firstChild.data
+    return node.find(name).text
 
 def step_tcx(data):
     partial_laps = []
@@ -39,38 +36,37 @@ def step_tcx(data):
         time = datetime.datetime.strptime(time_raw, format)
         etime = time - epoch
         distance = int(float(extract_child(node, "DistanceMeters"))*100)
-        points = node.getElementsByTagName("Position")[0]
+        # Should probably XPath this
+        points = node.find('Position')
         lat = float(extract_child(points, "LatitudeDegrees"))
         lon = float(extract_child(points, "LongitudeDegrees"))
         return (int(etime.total_seconds()), degree_to_semicircle(lat),
                 degree_to_semicircle(lon), distance)
 
-    for element in data.childNodes:
-        if element.nodeName != "Courses":
-            continue
+    for element in data.findall('Courses'):
         # Going to assume there can only be one course in a file...
-        course = element.getElementsByTagName("Course")[0]
-        for part in course.childNodes:
-            if part.nodeName == "Name":
+        course = element.find('Course')
+        for part in course:
+            if part.tag == "Name":
                 global track_name
-                track_name = part.firstChild.data + "\0"
-            elif part.nodeName == "Lap":
+                track_name = part.text + "\0"
+            elif part.tag == "Lap":
                 time = 0.0
                 distance = 0
                 start = (0.0, 0.0)
-                for attr in part.childNodes:
-                    if attr.nodeName == "TotalTimeSeconds":
-                        time = float(attr.firstChild.data)
-                    elif attr.nodeName == "DistanceMeters":
-                        distance = int(float(attr.firstChild.data)*100)
-                    elif attr.nodeName == "BeginPosition":
+                for attr in part:
+                    if attr.tag == "TotalTimeSeconds":
+                        time = float(attr.text)
+                    elif attr.tag == "DistanceMeters":
+                        distance = int(float(attr.text)*100)
+                    elif attr.tag == "BeginPosition":
                         lat = float(extract_child(attr, 'LatitudeDegrees'))
                         lon = float(extract_child(attr, 'LongitudeDegrees'))
                         start = (degree_to_semicircle(lat), degree_to_semicircle(lon))
                 partial_laps.append((time, distance, start))
                 # Find the first location that matches?
-            elif part.nodeName == "Track":
-                points = part.getElementsByTagName("Trackpoint")
+            elif part.tag == "Track":
+                points = part.findall("Trackpoint")
                 for tp in points:
                     trackpoints.append(track_point(tp))
 
@@ -95,21 +91,21 @@ def distance_ll(p1, p2):
 def step_gpx(data):
 # Hrmmmm, GPX data doesn't have distances included...
 
-    for element in data.childNodes:
-        if element.nodeName != "trk":
+    for element in data:
+        if element.tag != "trk":
             continue
         last_point = None
         time = 0 # Arbitrary... just fill it in randomly
-        for node in element.childNodes:
-            if node.nodeName == "name":
+        for node in element:
+            if node.tag == "name":
                 global track_name
-                track_name = node.firstChild.data + "\0"
-            elif node.nodeName == "trkseg":
-                for point in node.childNodes:
-                    if point.nodeName != "trkpt":
+                track_name = node.text + "\0"
+            elif node.tag == "trkseg":
+                for point in node:
+                    if point.tag != "trkpt":
                         continue
-                    lat = float(point.attributes['lat'].value)
-                    lon = float(point.attributes['lon'].value)
+                    lat = float(point.get('lat'))
+                    lon = float(point.get('lon'))
                     if last_point:
                         distance = distance_ll((lat, lon), last_point)
                     else:
@@ -120,11 +116,28 @@ def step_gpx(data):
                     time += 100
                     last_point = (lat, lon)
 
-if course.nodeName == "gpx":
+dom = ET.parse(sys.argv[1])
+
+course = dom.getroot()
+
+def remove_namespace(tree, ns):
+    nsl = len(ns)
+    for elem in tree.getiterator():
+        if elem.tag.startswith(ns):
+            elem.tag = elem.tag[nsl:]
+
+if course.tag == "{http://www.topografix.com/GPX/1/0}gpx":
+    remove_namespace(course, '{http://www.topografix.com/GPX/1/0}')
     step_gpx(course)
-    print(track_name)
-elif course.nodeName == "TrainingCenterDatabase": # == "tcx"
+#elif course.tag == "TrainingCenterDatabase": # == "tcx"
+elif course.tag == '{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}TrainingCenterDatabase':
+    # Pull off namespaces, they're not useful here
+    remove_namespace(course, '{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}')
     step_tcx(course)
+else:
+    print("Not TCX or GPX.")
+    print(course.tag)
+    sys.exit(0)
 
 # print(laps)
 # print(trackpoints)
