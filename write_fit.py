@@ -30,7 +30,7 @@ def distance_ll(p1, p2):
     p2 = [x*math.pi/180.0 for x in p2]
     x = (p2[1]-p1[1]) * math.cos((p1[0]+p1[1])/2);
     y = (p2[0] - p1[0]);
-    return int(math.hypot(x, y) * 6.3675e8); # Radius of the earth in km
+    return int(math.hypot(x, y) * 6.3675e8); # Radius of the earth in cm
 
 
 def step_tcx(data):
@@ -98,23 +98,22 @@ def step_gpx(data):
         time += 100
         last_point = (lat, lon)
 
-dom = ET.parse(sys.argv[1])
-
-course = dom.getroot()
-
 def remove_namespace(tree, ns):
     nsl = len(ns)
     for elem in tree.getiterator():
         if elem.tag.startswith(ns):
             elem.tag = elem.tag[nsl:]
 
-if course.tag == "{http://www.topografix.com/GPX/1/0}gpx":
-    remove_namespace(course, '{http://www.topografix.com/GPX/1/0}')
+dom = ET.parse(sys.argv[1])
+
+course = dom.getroot()
+
+namespace = course.tag.partition('}')[0]
+remove_namespace(course, namespace + '}') # The } got pulled off in the partition
+
+if course.tag == "gpx":
     step_gpx(course)
-#elif course.tag == "TrainingCenterDatabase": # == "tcx"
-elif course.tag == '{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}TrainingCenterDatabase':
-    # Pull off namespaces, they're not useful here
-    remove_namespace(course, '{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}')
+elif course.tag == 'TrainingCenterDatabase':
     step_tcx(course)
 else:
     print("Not TCX or GPX.")
