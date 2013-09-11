@@ -175,14 +175,12 @@ out.write(write_field(0, [
         ]))
 
 # 31, course
-# Define message 0, Reserved, little_endian, file_id = 31, 1 field
 # Define 1 field (name, string)
 out.write(write_field(31, [
     (5, "string", track_name.encode(encoding='ascii')) # Name
     ]))
 
 # 19, Laps
-# Define message 0, _, little endian, file_id = 19, 2 fields
 # Define 2 fields (timestamp, start_time)
 # This doesn't match up with the exported file...
 out.write(write_field(19, [
