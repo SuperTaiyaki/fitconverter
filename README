@@ -1,0 +1,6 @@
+Converter for GPX and TCX files to .fit format
+
+This has only been tested with Strava GPX export and RideWithGPS TCX Export.
+In both cases the route was successfully uploaded to a Forerunner 310XT using
+Garmin-Forerunner-610-Extractor.
+
