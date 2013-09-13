@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # vim: et sw=4 ts=4
 
 import sys
@@ -103,6 +103,10 @@ def remove_namespace(tree, ns):
     for elem in tree.getiterator():
         if elem.tag.startswith(ns):
             elem.tag = elem.tag[nsl:]
+
+if len(sys.argv) != 3:
+    print("Usage: %s [in] [out]" % sys.argv[0])
+    sys.exit(1)
 
 dom = ET.parse(sys.argv[1])
 
